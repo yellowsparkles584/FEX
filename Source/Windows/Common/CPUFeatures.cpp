@@ -81,9 +81,6 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine) {
   HostFeatures.SupportsSVE128 = false;
   HostFeatures.SupportsSVE256 = false;
 
-<<<<<<< HEAD
-  HostFeatures.SupportsCPUIndexInTPIDRRO = !IsWine;
-=======
   HostFeatures.SupportsCPUIndexInTPIDRRO = true;
 
   HostFeatures.HostType = HostType;
