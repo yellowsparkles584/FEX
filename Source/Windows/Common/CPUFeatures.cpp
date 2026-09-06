@@ -83,13 +83,6 @@ FEXCore::HostFeatures CPUFeatures::FetchHostFeatures(bool IsWine) {
 
   HostFeatures.SupportsCPUIndexInTPIDRRO = true;
 
-  HostFeatures.HostType = HostType;
-
-  if (HostType == FEXCore::HostFeatures::HostTypeEnum::Wow64) {
-    // AVX is unsupported for WOW64
-    HostFeatures.SupportsAVX = false;
-  }
->>>>>>> d96696c3e (•)
   return HostFeatures;
 }
 
