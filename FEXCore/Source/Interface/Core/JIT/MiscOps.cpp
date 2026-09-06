@@ -231,7 +231,7 @@ DEF_OP(PrintMsg) {
 
 DEF_OP(ProcessorID) {
   if (CTX->HostFeatures.SupportsCPUIndexInTPIDRRO) {
-    mrs(GetReg(Node), ARMEmitter::SystemRegister::TPIDRRO_EL0);
+    mov(ARMEmitter::Size::i64Bit, GetReg(Node), 0);
     return;
   }
 #ifdef _WIN32
