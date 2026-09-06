@@ -1,69 +1,222 @@
-name: Compile FEXCore
+name: FEXCore Standalone Nightlies
 
 on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit hash, branch, or tag to build (leave blank for latest HEAD)'
+        required: false
+        default: ''
+      version_label:
+        description: 'Override version label in profile.json (leave blank to auto-detect from git describe)'
+        required: false
+        default: ''
 
 jobs:
-  compile-fexcore:
-    runs-on: ubuntu-24.04-arm
-
+  # ==================================================================
+  # JOB 1: FEXCore Build
+  # ==================================================================
+  build-fex:
+    name: Build FEXCore
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+      commit_full: ${{ steps.version.outputs.commit_full }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-         
-      - name: Install Nix Package Manager
-        uses: cachix/install-nix-action@v31
-        with:
-         nix_path: nixpkgs=channel:nixos-unstable
-        
-      - name: Compile FEXCore
+      - name: Install Dependencies
         run: |
-          mkdir -p build/arm64ec && cd build/arm64ec
-          ../../Data/nix/cmake_configure_woa64.sh ../../ -G Ninja
-          ninja
-          mkdir ../wow64 && cd ../wow64
-          ../../Data/nix/cmake_configure_woa32.sh ../../ -G Ninja
-          ninja
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates curl xz-utils jq git zip \
+            build-essential python3 pkg-config cmake zstd \
+            dos2unix perl tar unzip meson ninja-build wget
 
-      - name: Package FEXCore DLLs and WCP
+      - name: Setup GLSLANG
         run: |
-          mkdir FEXCore_DLLs
-          cp -r ./build/arm64ec/Bin/libarm64ecfex.dll ./FEXCore_DLLs
-          cp -r ./build/wow64/Bin/libwow64fex.dll ./FEXCore_DLLs
+          wget -q https://github.com/KhronosGroup/glslang/releases/download/master-tot/glslang-master-linux-Release.zip
+          unzip -q glslang-master-linux-Release.zip -d glslang
+          echo "$PWD/glslang/bin" >> $GITHUB_PATH
 
-          mkdir -p FEXCore_WCP/system32
-          cp -r ./build/arm64ec/Bin/libarm64ecfex.dll ./FEXCore_WCP/system32
-          cp -r ./build/wow64/Bin/libwow64fex.dll ./FEXCore_WCP/system32
-          wget https://github.com/TGP-17/wcp-template/raw/refs/heads/main/FEXCore/profile.json
-          mv profile.json ./FEXCore_WCP
-          cd FEXCore_WCP
-          TODAY=$(date +'%y%m%d')
-          jq ".versionCode = $TODAY" profile.json > temp.json && mv temp.json profile.json
-          tar --zstd -cf FEXCore-Nightly-$TODAY.wcp profile.json system32
-          mv FEXCore-Nightly-$TODAY.wcp ../FEXCore_DLLs
+      - name: Setup Toolchain
+        run: |
+          LLVM_MINGW_TAG="20251104"
+          TOOLCHAIN_DIR="/opt/llvm-mingw"
+          wget -q "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_TAG/llvm-mingw-$LLVM_MINGW_TAG-ucrt-ubuntu-22.04-x86_64.tar.xz" -O llvm.tar.xz
+          sudo rm -rf "$TOOLCHAIN_DIR" && sudo mkdir -p "$TOOLCHAIN_DIR"
+          sudo tar -C "$TOOLCHAIN_DIR" --strip-components=1 -xJf llvm.tar.xz
+          echo "$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
 
-      - name: Upload FEXCore_DLLs
-        uses: actions/upload-artifact@v4
+      - name: Clone and checkout target commit
+        run: |
+          git clone --recursive https://github.com/yellowsparkles584/FEX.git source
+          cd source
+
+          TARGET_COMMIT="${{ github.event.inputs.commit }}"
+          if [ -n "$TARGET_COMMIT" ]; then
+            echo "Checking out specified commit/ref: $TARGET_COMMIT"
+            git fetch --all --tags
+            git checkout "$TARGET_COMMIT"
+            # Update submodules after checkout
+            git submodule update --init --recursive
+          else
+            echo "No commit specified — building latest HEAD"
+          fi
+
+      - name: Determine version label
+        id: version
+        run: |
+          cd source
+
+          COMMIT_FULL=$(git rev-parse HEAD)
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+
+          # Distance from the nearest FEX release tag decides the name:
+          #   - exactly on the tag -> stable release: FEXCore-<ver>-stable
+          #   - N commits past it   -> nightly:        FEX-<ver>+N-Nightly-<sha>
+          EXACT_TAG=$(git tag --points-at HEAD | grep -E '^FEX-' | sort -V | tail -1 || true)
+          if [ -n "$EXACT_TAG" ]; then
+            BASE_TAG="$EXACT_TAG"
+            COMMITS_SINCE_TAG=0
+          else
+            BASE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "FEX-Unknown")
+            if [ "$BASE_TAG" = "FEX-Unknown" ]; then
+              COMMITS_SINCE_TAG=1
+            else
+              COMMITS_SINCE_TAG=$(git rev-list "${BASE_TAG}..HEAD" --count 2>/dev/null || echo 0)
+            fi
+          fi
+
+          # Use user-supplied label if given, otherwise build one
+          CUSTOM_LABEL="${{ github.event.inputs.version_label }}"
+          if [ -n "$CUSTOM_LABEL" ]; then
+            VERSION_NAME="${CUSTOM_LABEL}"
+          elif [ "$BASE_TAG" = "FEX-Unknown" ]; then
+            VERSION_NAME="FEX-Unknown-Nightly-${COMMIT_SHORT}"
+          elif [ "$COMMITS_SINCE_TAG" -eq 0 ]; then
+            VERSION_NAME="FEXCore-${BASE_TAG#FEX-}-stable"
+          else
+            VERSION_NAME="${BASE_TAG}+${COMMITS_SINCE_TAG}-Nightly-${COMMIT_SHORT}"
+          fi
+
+          echo "VERSION_NAME=${VERSION_NAME}" >> $GITHUB_ENV
+          echo "version=${VERSION_NAME}" >> $GITHUB_OUTPUT
+          echo "commit=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
+          echo "commit_full=${COMMIT_FULL}" >> $GITHUB_OUTPUT
+
+          echo "Building: $VERSION_NAME (full: $COMMIT_FULL)"
+
+      - name: Build FEX
+        run: |
+          cd source
+
+          build_arch() {
+            local triple="$1"
+            local dest="$2"
+            local build_dir="build-${triple}"
+
+            rm -rf "$build_dir" && mkdir "$build_dir" && cd "$build_dir"
+            cmake -G Ninja -Wno-dev \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_TOOLCHAIN_FILE=../Data/CMake/toolchain_mingw.cmake \
+              -DMINGW_TRIPLE="${triple}-w64-mingw32" \
+              -DCMAKE_INSTALL_PREFIX=/usr \
+              -DCMAKE_INSTALL_LIBDIR=/usr/lib/wine/aarch64-windows \
+              -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
+              -DENABLE_LTO=False -DENABLE_ASSERTIONS=False -DBUILD_TESTING=False \
+              ..
+            ninja -j 2
+            DESTDIR="$dest" ninja install
+            cd ..
+          }
+
+          build_arch "arm64ec" "../../stage-ec"
+          build_arch "aarch64" "../../stage-wo"
+
+      - name: Package
+        run: |
+          rm -rf final_package && mkdir -p final_package/system32
+
+          DLL_EC=$(find stage-ec -type f -name '*.dll' | head -n 1)
+          DLL_WOW=$(find stage-wo -type f -name '*.dll' | head -n 1)
+
+          cp "$DLL_EC" final_package/system32/libarm64ecfex.dll
+          cp "$DLL_WOW" final_package/system32/libwow64fex.dll
+          /opt/llvm-mingw/bin/llvm-strip --strip-all final_package/system32/*.dll
+
+          cat > final_package/profile.json << EOF
+          {
+            "type": "FEXCore",
+            "versionName": "${{ env.VERSION_NAME }}",
+            "versionCode": ${{ github.run_number }},
+            "description": "${{ env.VERSION_NAME }}",
+            "author": "FEX-Emu",
+            "files": [
+              { "source": "system32/libarm64ecfex.dll", "target": "\${system32}/libarm64ecfex.dll" },
+              { "source": "system32/libwow64fex.dll", "target": "\${system32}/libwow64fex.dll" }
+            ]
+          }
+          EOF
+
+          cd final_package
+
+          tar -cJf ../${{ env.VERSION_NAME }}.wcp .
+          zip -r ../${{ env.VERSION_NAME }}.zip .
+
+      - uses: actions/upload-artifact@v4
         with:
-         name: FEXCore DLLs
-         path: ./FEXCore_DLLs
+          name: fex-nightly
+          path: |
+            *.wcp
+            *.zip
 
-      - name: "Set Date Variable"
-        id: date
-        run: echo "date=$(date +'%y%m%d')" >> $GITHUB_ENV
+  # ==================================================================
+  # JOB 2: Release
+  # ==================================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-fex]
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          merge-multiple: true
 
-      - name: "Create Release"
-        if: github.event_name != 'pull_request'
+      - name: Set Release Variables
+        run: |
+          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+          READABLE_DATE=$(date +'%Y-%m-%d %H:%M:%S UTC')
+          echo "TAG_NAME=fexcore-nightly-$TIMESTAMP" >> $GITHUB_ENV
+          echo "RELEASE_NAME=FEXCore Nightly Build - $READABLE_DATE" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-         name: "FEXCore-Nightly-${{ env.date }}"
-         tag_name: "${{ env.date }}"
-         prerelease: false
-         files: |
-          ./FEXCore_DLLs/FEXCore-Nightly*.wcp
-          ./FEXCore_DLLs/libarm64ecfex.dll
-          ./FEXCore_DLLs/libwow64fex.dll
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.RELEASE_NAME }}
+          prerelease: false
+          make_latest: true
+          body: |
+            ### FEXCore Build: ${{ needs.build-fex.outputs.version }}
+
+            | Property | Value |
+            | :--- | :--- |
+            | **Version** | `${{ needs.build-fex.outputs.version }}` |
+            | **Commit (short)** | [`${{ needs.build-fex.outputs.commit }}`](https://github.com/FEX-Emu/FEX/commit/${{ needs.build-fex.outputs.commit_full }}) |
+            | **Commit (full)** | `${{ needs.build-fex.outputs.commit_full }}` |
+            | **Source input** | `${{ github.event.inputs.commit || 'latest HEAD' }}` |
+
+            ### Files Included
+            - `*.wcp` — packaged for Winlator
+            - `*.zip` — for manual injection with GameHub
+          files: |
+            ./artifacts/*.wcp
+            ./artifacts/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
