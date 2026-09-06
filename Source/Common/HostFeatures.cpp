@@ -634,7 +634,7 @@ FEXCore::HostFeatures FetchHostFeatures() {
   FillMIDRInformationViaLinux(&HostFeatures);
   FetchHostFeatures(Features, HostFeatures, true, CTR, MIDR);
 
-  HostFeatures.SupportsCPUIndexInTPIDRRO = false;
+  HostFeatures.SupportsCPUIndexInTPIDRRO = true;
   HostFeatures.HostType = FEXCore::HostFeatures::HostTypeEnum::Linux;
   return HostFeatures;
 }
