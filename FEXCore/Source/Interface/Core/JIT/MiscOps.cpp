@@ -73,8 +73,8 @@ DEF_OP(Break) {
   uint64_t Constant {};
   memcpy(&Constant, &State, sizeof(State));
 
-  LoadConstant(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::r1, Constant);
-  str(ARMEmitter::XReg::x1, STATE, offsetof(FEXCore::Core::CpuStateFrame, SynchronousFaultData));
+  LoadConstant(ARMEmitter::Size::i64Bit, TMP1, Constant);
+  str(TMP1, STATE, offsetof(FEXCore::Core::CpuStateFrame, SynchronousFaultData));
 
   switch (Op->Reason.Signal) {
   case Core::FAULT_SIGILL:
@@ -168,7 +168,7 @@ DEF_OP(PushRoundingMode) {
   } else {
     LOGMAN_THROW_A_FMT(Op->RoundMode == 1 || Op->RoundMode == 2, "expect a valid round mode");
 
-    and_(ARMEmitter::Size::i64Bit, TMP1, Dest, ~(Op->RoundMode << 22));
+    and_(ARMEmitter::Size::i64Bit, TMP1, Dest, ~(3 << 22));
     orr(ARMEmitter::Size::i64Bit, TMP1, TMP1, (Op->RoundMode == 2 ? 1 : 2) << 22);
   }
 
@@ -231,7 +231,7 @@ DEF_OP(PrintMsg) {
 
 DEF_OP(ProcessorID) {
   if (CTX->HostFeatures.SupportsCPUIndexInTPIDRRO) {
-    mrs(GetReg(Node), ARMEmitter::SystemRegister::TPIDRRO_EL0);
+    mov(ARMEmitter::Size::i64Bit, GetReg(Node), 0);
     return;
   }
 #ifdef _WIN32
@@ -282,7 +282,7 @@ DEF_OP(ProcessorID) {
   // Load the values returned by the kernel
   ldp<ARMEmitter::IndexType::OFFSET>(ARMEmitter::WReg::w0, ARMEmitter::WReg::w1, ARMEmitter::Reg::rsp);
   // Deallocate stack space
-  sub(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, ARMEmitter::Reg::rsp, 16);
+  add(ARMEmitter::Size::i64Bit, ARMEmitter::Reg::rsp, ARMEmitter::Reg::rsp, 16);
 
   // Now that we are done in the syscall we need to carefully peel back the state
   // First unspill the registers from before

@@ -10,6 +10,7 @@ $end_info$
 #include "Common/FEXServerClient.h"
 #include "Common/Config.h"
 #include "Common/HostFeatures.h"
+#include "Common/Linux/LinuxVersion.h"
 #include "Common/Linux/SBRKAllocations.h"
 #include "PortabilityInfo.h"
 #include "ELFCodeLoader.h"
@@ -463,8 +464,8 @@ int main(int argc, char** argv, char** const envp) {
     return -ENOEXEC;
   }
 
-  uint32_t KernelVersion = FEX::HLE::SyscallHandler::CalculateHostKernelVersion();
-  if (KernelVersion < FEX::HLE::SyscallHandler::KernelVersion(5, 15)) {
+  uint32_t KernelVersion = FEX::LinuxVersion::CalculateHostKernelVersion();
+  if (KernelVersion < FEX::LinuxVersion::KernelVersion(5, 15)) {
     LogMan::Msg::EFmt("FEX requires kernel 5.15 minimum. Expect problems.");
   }
 
@@ -524,16 +525,18 @@ int main(int argc, char** argv, char** const envp) {
   FEXCore::Profiler::Init(Program.ProgramName, Program.ProgramPath);
 
   bool SupportsAVX {};
+  bool SupportsSVE256 {};
   fextl::unique_ptr<FEXCore::Context::Context> CTX;
   {
     auto HostFeatures = FEX::FetchHostFeatures();
     CTX = FEXCore::Context::Context::CreateNewContext(HostFeatures);
     SupportsAVX = HostFeatures.SupportsAVX;
+    SupportsSVE256 = HostFeatures.SupportsSVE256;
   }
 
   FEX::Kernel::Init(Loader.Is64BitMode(), CTX.get());
 
-  auto SignalDelegation = FEX::HLE::CreateSignalDelegator(CTX.get(), Program.ProgramName, SupportsAVX);
+  auto SignalDelegation = FEX::HLE::CreateSignalDelegator(CTX.get(), Program.ProgramName, SupportsAVX, SupportsSVE256);
   auto ThunkHandler = FEX::HLE::CreateThunkHandler();
 
   auto SyscallHandler = Loader.Is64BitMode() ?

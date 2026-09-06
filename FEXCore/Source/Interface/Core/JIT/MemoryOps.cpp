@@ -267,7 +267,7 @@ DEF_OP(LoadContextIndexed) {
           ldr(Dst.Q(), TMP1, Op->BaseOffset);
         } else {
           add(ARMEmitter::Size::i64Bit, TMP1, TMP1, Op->BaseOffset);
-          ldur(Dst.Q(), TMP1, Op->BaseOffset);
+          ldur(Dst.Q(), TMP1);
         }
         break;
       case IR::OpSize::i256Bit:
@@ -333,7 +333,7 @@ DEF_OP(StoreContextIndexed) {
           str(Value.Q(), TMP1, Op->BaseOffset);
         } else {
           add(ARMEmitter::Size::i64Bit, TMP1, TMP1, Op->BaseOffset);
-          stur(Value.Q(), TMP1, Op->BaseOffset);
+          stur(Value.Q(), TMP1);
         }
         break;
       case IR::OpSize::i256Bit:
@@ -568,7 +568,7 @@ DEF_OP(LoadDF) {
 
 DEF_OP(ContextClear) {
   auto Op = IROp->C<IR::IROp_ContextClear>();
-  if (CTX->HostFeatures.SupportsCLZERO) {
+  if (CTX->HostFeatures.PreferZVAForVZero) {
     // We can use CLZero directly when hardware supports it.
     // Provides a fairly generous speed-up on Ampere1A hardware.
     // TODO: When FEAT_MOPS hardware ships, test memset using MOPS.
@@ -2400,12 +2400,13 @@ DEF_OP(CacheLineClear) {
 
   // Clear dcache only
   // icache doesn't matter here since the guest application shouldn't be calling clflush on JIT code.
+  // check host cacheline size again x86_64 size to ensure at least 64 bytes are cleaned
   if (CTX->HostFeatures.DCacheLineSize >= 64U) {
     dc(ARMEmitter::DataCacheOperation::CIVAC, MemReg);
   } else {
     auto CurrentWorkingReg = MemReg.X();
-    for (size_t i = 0; i < std::max(1U, CTX->HostFeatures.DCacheLineSize / 64U); ++i) {
-      dc(ARMEmitter::DataCacheOperation::CIVAC, TMP1);
+    for (size_t i = 0; i < std::max(1U, 64U / CTX->HostFeatures.DCacheLineSize); ++i) {
+      dc(ARMEmitter::DataCacheOperation::CIVAC, CurrentWorkingReg);
       add(ARMEmitter::Size::i64Bit, TMP1, CurrentWorkingReg, CTX->HostFeatures.DCacheLineSize);
       CurrentWorkingReg = TMP1;
     }
@@ -2428,12 +2429,13 @@ DEF_OP(CacheLineClean) {
   auto MemReg = GetReg(Op->Addr);
 
   // Clean dcache only
+  // check host cacheline size again x86_64 size to ensure at least 64 bytes are cleaned
   if (CTX->HostFeatures.DCacheLineSize >= 64U) {
     dc(ARMEmitter::DataCacheOperation::CVAC, MemReg);
   } else {
     auto CurrentWorkingReg = MemReg.X();
-    for (size_t i = 0; i < std::max(1U, CTX->HostFeatures.DCacheLineSize / 64U); ++i) {
-      dc(ARMEmitter::DataCacheOperation::CVAC, TMP1);
+    for (size_t i = 0; i < std::max(1U, 64U / CTX->HostFeatures.DCacheLineSize); ++i) {
+      dc(ARMEmitter::DataCacheOperation::CVAC, CurrentWorkingReg);
       add(ARMEmitter::Size::i64Bit, TMP1, CurrentWorkingReg, CTX->HostFeatures.DCacheLineSize);
       CurrentWorkingReg = TMP1;
     }
